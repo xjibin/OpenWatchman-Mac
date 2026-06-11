@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.openwatchman.agent</string>
+
+  <!-- The installer replaces @APPLET@ with the executable inside the
+       locally generated OpenWatchman.app. The app wrapper exists so that
+       Full Disk Access is granted to this one tool, not to /bin/bash. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>@APPLET@</string>
+  </array>
+
+  <!-- Fires whenever anything in the watched folder changes. -->
+  <key>WatchPaths</key>
+  <array>
+    <string>@WATCH_DIR@</string>
+  </array>
+
+  <!-- Also fires once at every login, which covers "first unlock of a
+       new month" and sweeps anything that arrived while logged out. -->
+  <key>RunAtLoad</key><true/>
+
+  <key>StandardOutPath</key><string>@HOME@/Library/Logs/openwatchman.out.log</string>
+  <key>StandardErrorPath</key><string>@HOME@/Library/Logs/openwatchman.err.log</string>
+</dict>
+</plist>

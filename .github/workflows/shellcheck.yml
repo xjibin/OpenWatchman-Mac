@@ -1,0 +1,20 @@
+name: ShellCheck
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bash syntax check
+        run: |
+          bash -n bin/openwatchman.sh
+          bash -n install.sh
+          bash -n uninstall.sh
+
+      - name: ShellCheck
+        run: shellcheck -S style bin/openwatchman.sh install.sh uninstall.sh
