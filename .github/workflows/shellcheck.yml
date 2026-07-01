@@ -2,19 +2,19 @@ name: ShellCheck
 
 on:
   push:
+    branches: [ main ]
   pull_request:
+    branches: [ main ]
 
 jobs:
-  lint:
+  shellcheck:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Bash syntax check
-        run: |
-          bash -n bin/openwatchman.sh
-          bash -n install.sh
-          bash -n uninstall.sh
-
-      - name: ShellCheck
-        run: shellcheck -S style bin/openwatchman.sh install.sh uninstall.sh
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: -s bash
+        with:
+          scandir: '.'
+          additional_files: 'install.sh uninstall.sh'

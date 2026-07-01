@@ -1,2 +1,17 @@
+# macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local build / test artifacts (the app wrapper is generated at install time)
+*.app/
+build/
+tmp/
 *.log

@@ -85,6 +85,8 @@ OpenWatchman will install exactly these pieces (per-user, no sudo):
         moved; only files added after this moment are eligible.
   4. LaunchAgent     -> $PLIST
         Label $LABEL, watching: $WATCH_DIR
+        Runs on folder change, at login, and every 5 minutes (the periodic
+        run reconciles files apps save straight into a month subfolder).
   5. Load the agent with launchctl.
 
 Logs go to ~/Library/Logs/openwatchman.log (and .out.log / .err.log).
@@ -205,7 +207,8 @@ Useful afterwards:
   Preview anytime (moves nothing):
     $SCRIPT_DEST --dry-run
 
-  Optionally sort the files that existed BEFORE install — review first:
+  Optionally sort/relocate the files that existed BEFORE install, or fix
+  files already sitting in the wrong month folder — review first, then run:
     OPENWATCHMAN_BASELINE=1 $SCRIPT_DEST --dry-run
     OPENWATCHMAN_BASELINE=1 $SCRIPT_DEST
 
