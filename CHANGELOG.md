@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.2.1] — 2026-07-01
+
+### Fixed
+- `owm doctor` Spotlight check. It ran `mdutil -s` on the watched folder, but
+  `mdutil` reports indexing state per *volume*, not per folder, so a subfolder
+  returns "unknown indexing state" and the check false-warned. It now probes
+  the attribute the tool actually needs — `kMDItemDateAdded` via `mdls` on a
+  sample file — and warns only if that genuinely comes back null.
+
 ## [1.2.0] — 2026-07-01
 
 ### Added

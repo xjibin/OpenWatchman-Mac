@@ -152,11 +152,15 @@ cmd_doctor() {
     warn "agent not loaded"
   fi
   if [ -f "$MARKER" ]; then ok "baseline marker present ($(baseline_date))"; else warn "baseline marker missing"; fi
-  if command -v mdutil >/dev/null 2>&1; then
-    if mdutil -s "$WATCH_DIR" 2>/dev/null | grep -qi 'indexing enabled'; then
-      ok "Spotlight indexing enabled on watched folder"
+  probe="$(find "$WATCH_DIR" -maxdepth 3 -type f ! -name '.*' 2>/dev/null | head -1)"
+  if [ -z "$probe" ]; then
+    ok "Spotlight check skipped (no files under $WATCH_DIR yet)"
+  else
+    da="$(mdls -name kMDItemDateAdded -raw "$probe" 2>/dev/null)"
+    if [ -n "$da" ] && [ "$da" != "(null)" ]; then
+      ok "Spotlight date-added available (kMDItemDateAdded probe on a real file)"
     else
-      warn "Spotlight indexing may be off for $WATCH_DIR (date-added falls back to mtime)"
+      warn "Spotlight date-added is null for a sample file (will fall back to mtime)"
     fi
   fi
   if [ -f "$ERRLOG" ] && grep -qi 'operation not permitted' "$ERRLOG"; then
