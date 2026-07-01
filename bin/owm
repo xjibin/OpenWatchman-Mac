@@ -5,9 +5,13 @@
 # A thin, human-facing front-end over the sorter engine (openwatchman.sh).
 # The background launchd agent calls the engine directly and stays silent;
 # this banner and all CLI output are for interactive use only.
+#
+# Installed under the friendly name "openwatch" (with "owm" as a short alias).
+# It refers to itself by whatever name it was invoked as.
 
 set -u
 
+PROG="$(basename -- "$0")"
 LABEL="com.openwatchman.agent"
 WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
 MARKER="$WATCH_DIR/.openwatchman-baseline"
@@ -60,13 +64,13 @@ version() {
 usage() {
   banner
   cat <<EOF
-Usage: owm <command>
+Usage: $PROG <command>
 
   status     installed? loaded? baseline date, recent activity
   preview    dry-run — what would move right now (moves nothing)
-  sweep      dry-run a full one-time reconcile; 'owm sweep --apply' runs it
+  sweep      dry-run a full one-time reconcile; '$PROG sweep --apply' runs it
   run        trigger the agent to do a pass now
-  logs       recent log lines ('owm logs -f' to follow)
+  logs       recent log lines ('$PROG logs -f' to follow)
   doctor     diagnostics, incl. a Full Disk Access hint
   version    print version
   help       this help
@@ -76,11 +80,11 @@ EOF
 }
 
 need_macos() {
-  [ "$(uname -s)" = "Darwin" ] || { echo "owm: macOS only." >&2; exit 1; }
+  [ "$(uname -s)" = "Darwin" ] || { echo "$PROG: macOS only." >&2; exit 1; }
 }
 require_engine() {
   [ -n "$ENGINE" ] || {
-    echo "owm: sorter engine not found (expected ~/.local/bin/openwatchman.sh). Run ./install.sh first." >&2
+    echo "$PROG: sorter engine not found (expected ~/.local/bin/openwatchman.sh). Run ./install.sh first." >&2
     exit 1; }
 }
 loaded() { launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; }
@@ -112,21 +116,21 @@ cmd_sweep() {
     printf "Proceed? [y/N] "; read -r a
     case "$a" in y|Y) ;; *) echo "aborted."; exit 1 ;; esac
     OPENWATCHMAN_BASELINE=1 "$ENGINE"
-    echo "Done — see 'owm logs'."
+    echo "Done — see '$PROG logs'."
   else
     echo "${D}Full one-time reconcile, DRY RUN (baseline ignored, nothing moves):${N}"
     OPENWATCHMAN_BASELINE=1 "$ENGINE" --dry-run
     echo
-    echo "If that looks right, apply it with:  owm sweep --apply"
+    echo "If that looks right, apply it with:  $PROG sweep --apply"
   fi
 }
 
 cmd_run() {
   need_macos
   if loaded && launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null; then
-    echo "Triggered a run. Check 'owm logs'."
+    echo "Triggered a run. Check '$PROG logs'."
   else
-    echo "owm: couldn't trigger the agent (is it loaded? try ./install.sh)." >&2
+    echo "$PROG: couldn't trigger the agent (is it loaded? try ./install.sh)." >&2
     exit 1
   fi
 }
@@ -170,7 +174,7 @@ cmd_doctor() {
     ok "no Full Disk Access errors in the log"
   fi
   echo
-  echo "${D}Tip: 'owm preview' shows what would move now; download a file, then 'owm logs'.${N}"
+  echo "${D}Tip: '$PROG preview' shows what would move now; download a file, then '$PROG logs'.${N}"
 }
 
 cmd="${1:-}"; if [ "$#" -gt 0 ]; then shift; fi
@@ -183,5 +187,5 @@ case "$cmd" in
   run)                    cmd_run ;;
   logs)                   cmd_logs "$@" ;;
   doctor)                 cmd_doctor ;;
-  *) echo "owm: unknown command: $cmd" >&2; echo "Run 'owm help'." >&2; exit 1 ;;
+  *) echo "$PROG: unknown command: $cmd" >&2; echo "Run '$PROG help'." >&2; exit 1 ;;
 esac
