@@ -17,4 +17,4 @@ jobs:
           SHELLCHECK_OPTS: -s bash
         with:
           scandir: '.'
-          additional_files: 'install.sh uninstall.sh'
+          additional_files: 'install.sh uninstall.sh bin/owm'

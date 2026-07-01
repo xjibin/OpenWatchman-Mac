@@ -108,6 +108,15 @@ mkdir -p "$(dirname "$SCRIPT_DEST")" "$LOG_DIR"
 cp "$SCRIPT_SRC" "$SCRIPT_DEST"
 chmod 755 "$SCRIPT_DEST"
 
+# install the CLI front-end (owm)
+CLI_SRC="$REPO_DIR/bin/owm"
+CLI_DEST="$HOME/.local/bin/owm"
+if [ -f "$CLI_SRC" ]; then
+  cp "$CLI_SRC" "$CLI_DEST"
+  chmod 755 "$CLI_DEST"
+  echo "      installed CLI: $CLI_DEST (run 'owm help')"
+fi
+
 # --- 2. app wrapper ----------------------------------------------------------
 echo "[2/6] Building local app wrapper (osacompile)"
 mkdir -p "$HOME/Applications"
@@ -212,6 +221,13 @@ Then test it: download any file into $WATCH_DIR and run
 You should see:  moved  <your file>  ->  $(date +%Y)/$(( 10#$(date +%m) ))/
 
 Useful afterwards:
+
+  Command-line interface ('owm help' for all commands):
+    owm status    # running? baseline, recent activity
+    owm preview   # dry-run: what would move now
+    owm doctor    # diagnostics + Full Disk Access hint
+  If 'owm' is not found, add ~/.local/bin to your PATH, or run ~/.local/bin/owm.
+
 
   Preview anytime (moves nothing):
     $SCRIPT_DEST --dry-run

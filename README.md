@@ -184,6 +184,24 @@ Watching a different folder: set it at install time —
 `OPENWATCHMAN_DIR="$HOME/Desktop" ./install.sh`. The chosen folder is baked
 into the agent and the app wrapper. (v1 watches one folder per install.)
 
+## Command-line interface
+
+Alongside the background agent, the installer adds a small CLI, `owm`, for
+checking on OpenWatchman and running things by hand:
+
+```text
+owm status     installed? loaded? baseline date, recent activity
+owm preview    dry-run — what would move right now (moves nothing)
+owm sweep      dry-run a full one-time reconcile; 'owm sweep --apply' runs it
+owm run        trigger the agent to do a pass now
+owm logs       recent log lines ('owm logs -f' to follow)
+owm doctor     diagnostics, including a Full Disk Access hint
+owm help       all commands
+```
+
+If `owm` isn't on your `PATH` after install, add `~/.local/bin` to it (or
+invoke `~/.local/bin/owm`). From a clone you can also run `./bin/owm`.
+
 ## How it works
 
 - A `launchd` LaunchAgent runs the script on three triggers: `WatchPaths`

@@ -4,6 +4,15 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.2.0] — 2026-07-01
+
+### Added
+- `owm` — a command-line interface, headed by an ASCII banner, with
+  subcommands: `status`, `preview`, `sweep`, `run`, `logs`, `doctor`,
+  `version`, `help`. `install.sh` installs it to `~/.local/bin/owm`; it drives
+  the same engine the agent uses. The headless agent runs stay silent — the
+  banner and CLI output are for interactive use only.
+
 ## [1.1.1] — 2026-07-01
 
 ### Added

@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+#
+# owm — OpenWatchman command-line interface.
+#
+# A thin, human-facing front-end over the sorter engine (openwatchman.sh).
+# The background launchd agent calls the engine directly and stays silent;
+# this banner and all CLI output are for interactive use only.
+
+set -u
+
+LABEL="com.openwatchman.agent"
+WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
+MARKER="$WATCH_DIR/.openwatchman-baseline"
+LOG="$HOME/Library/Logs/openwatchman.log"
+ERRLOG="$HOME/Library/Logs/openwatchman.err.log"
+APP="$HOME/Applications/OpenWatchman.app"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+# --- resolve where this script lives (portable; macOS has no readlink -f) ---
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in /*) ;; *) SOURCE="$DIR/$SOURCE" ;; esac
+done
+SELF_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+
+# --- find the engine: next to us (repo) or installed ------------------------
+ENGINE=""
+for c in "$SELF_DIR/openwatchman.sh" "$HOME/.local/bin/openwatchman.sh"; do
+  if [ -x "$c" ]; then ENGINE="$c"; break; fi
+done
+
+# --- colors only on a terminal ----------------------------------------------
+if [ -t 1 ]; then B=$'\033[36m'; D=$'\033[2m'; Y=$'\033[33m'; G=$'\033[32m'; N=$'\033[0m'
+else B=""; D=""; Y=""; G=""; N=""; fi
+
+banner() {
+  printf '%s' "$B"
+  cat <<'ART'
+   ____               __          __   _       _                           
+  / __ \              \ \        / /  | |     | |                          
+ | |  | |_ __   ___ _ _\ \  /\  / /_ _| |_ ___| |__  _ __ ___   __ _ _ __  
+ | |  | | '_ \ / _ \ '_ \ \/  \/ / _` | __/ __| '_ \| '_ ` _ \ / _` | '_ \ 
+ | |__| | |_) |  __/ | | \  /\  / (_| | || (__| | | | | | | | | (_| | | | |
+  \____/| .__/ \___|_| |_|\/  \/ \__,_|\__\___|_| |_|_| |_| |_|\__,_|_| |_|
+        | |                                                                
+        |_|
+ART
+  printf '%s' "$N"
+  printf '%s  Sort new downloads & screenshots into Year/Month folders.%s\n\n' "$D" "$N"
+}
+
+version() {
+  local v=""
+  [ -n "$ENGINE" ] && v="$(grep -m1 '^VERSION=' "$ENGINE" | cut -d'"' -f2)"
+  echo "OpenWatchman ${v:-unknown}"
+}
+
+usage() {
+  banner
+  cat <<EOF
+Usage: owm <command>
+
+  status     installed? loaded? baseline date, recent activity
+  preview    dry-run — what would move right now (moves nothing)
+  sweep      dry-run a full one-time reconcile; 'owm sweep --apply' runs it
+  run        trigger the agent to do a pass now
+  logs       recent log lines ('owm logs -f' to follow)
+  doctor     diagnostics, incl. a Full Disk Access hint
+  version    print version
+  help       this help
+
+Watched folder: $WATCH_DIR   (override with OPENWATCHMAN_DIR)
+EOF
+}
+
+need_macos() {
+  [ "$(uname -s)" = "Darwin" ] || { echo "owm: macOS only." >&2; exit 1; }
+}
+require_engine() {
+  [ -n "$ENGINE" ] || {
+    echo "owm: sorter engine not found (expected ~/.local/bin/openwatchman.sh). Run ./install.sh first." >&2
+    exit 1; }
+}
+loaded() { launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; }
+baseline_date() {
+  [ -f "$MARKER" ] || { echo "none"; return; }
+  date -r "$(cat "$MARKER" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unreadable"
+}
+
+cmd_status() {
+  need_macos
+  banner
+  if loaded; then echo "${G}●${N} agent loaded  ($LABEL)"; else echo "${Y}○${N} agent not loaded — run ./install.sh"; fi
+  echo "  watched : $WATCH_DIR"
+  echo "  baseline: $(baseline_date)  (only files added after this are eligible)"
+  echo "  recent activity:"
+  if [ -f "$LOG" ]; then tail -n 5 "$LOG" | sed 's/^/    /'; else echo "    (no log yet)"; fi
+}
+
+cmd_preview() {
+  need_macos; require_engine
+  echo "${D}Preview (nothing will move):${N}"
+  "$ENGINE" --dry-run
+}
+
+cmd_sweep() {
+  need_macos; require_engine
+  if [ "${1:-}" = "--apply" ]; then
+    echo "${Y}This sorts/relocates EVERY eligible file, including ones from before install.${N}"
+    printf "Proceed? [y/N] "; read -r a
+    case "$a" in y|Y) ;; *) echo "aborted."; exit 1 ;; esac
+    OPENWATCHMAN_BASELINE=1 "$ENGINE"
+    echo "Done — see 'owm logs'."
+  else
+    echo "${D}Full one-time reconcile, DRY RUN (baseline ignored, nothing moves):${N}"
+    OPENWATCHMAN_BASELINE=1 "$ENGINE" --dry-run
+    echo
+    echo "If that looks right, apply it with:  owm sweep --apply"
+  fi
+}
+
+cmd_run() {
+  need_macos
+  if loaded && launchctl kickstart -k "gui/$(id -u)/$LABEL" 2>/dev/null; then
+    echo "Triggered a run. Check 'owm logs'."
+  else
+    echo "owm: couldn't trigger the agent (is it loaded? try ./install.sh)." >&2
+    exit 1
+  fi
+}
+
+cmd_logs() {
+  [ -f "$LOG" ] || { echo "No log yet at $LOG"; exit 0; }
+  if [ "${1:-}" = "-f" ]; then tail -f "$LOG"; else tail -n 20 "$LOG"; fi
+}
+
+cmd_doctor() {
+  need_macos
+  banner
+  echo "Diagnostics:"
+  ok()   { printf '  %s[ok]%s  %s\n' "$G" "$N" "$1"; }
+  warn() { printf '  %s[!!]%s  %s\n' "$Y" "$N" "$1"; }
+  if [ -n "$ENGINE" ]; then ok "engine: $ENGINE"; else warn "engine script not found"; fi
+  if [ -d "$APP" ]; then ok "app wrapper present"; else warn "app wrapper missing ($APP)"; fi
+  if [ -f "$PLIST" ]; then ok "LaunchAgent plist present"; else warn "plist missing ($PLIST)"; fi
+  if loaded; then
+    ok "agent loaded"
+    launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null | grep -E 'runs =|last exit code =' | sed 's/^ */        /'
+  else
+    warn "agent not loaded"
+  fi
+  if [ -f "$MARKER" ]; then ok "baseline marker present ($(baseline_date))"; else warn "baseline marker missing"; fi
+  if command -v mdutil >/dev/null 2>&1; then
+    if mdutil -s "$WATCH_DIR" 2>/dev/null | grep -qi 'indexing enabled'; then
+      ok "Spotlight indexing enabled on watched folder"
+    else
+      warn "Spotlight indexing may be off for $WATCH_DIR (date-added falls back to mtime)"
+    fi
+  fi
+  if [ -f "$ERRLOG" ] && grep -qi 'operation not permitted' "$ERRLOG"; then
+    warn "Full Disk Access looks MISSING — \"Operation not permitted\" is in the error log."
+    echo "        Grant it to $APP in System Settings > Privacy & Security > Full Disk Access, then reload the agent."
+  else
+    ok "no Full Disk Access errors in the log"
+  fi
+  echo
+  echo "${D}Tip: 'owm preview' shows what would move now; download a file, then 'owm logs'.${N}"
+}
+
+cmd="${1:-}"; if [ "$#" -gt 0 ]; then shift; fi
+case "$cmd" in
+  ""|help|-h|--help)      usage ;;
+  version|-v|--version)   version ;;
+  status)                 cmd_status ;;
+  preview|dry-run)        cmd_preview ;;
+  sweep)                  cmd_sweep "$@" ;;
+  run)                    cmd_run ;;
+  logs)                   cmd_logs "$@" ;;
+  doctor)                 cmd_doctor ;;
+  *) echo "owm: unknown command: $cmd" >&2; echo "Run 'owm help'." >&2; exit 1 ;;
+esac
