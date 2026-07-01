@@ -186,21 +186,23 @@ into the agent and the app wrapper. (v1 watches one folder per install.)
 
 ## Command-line interface
 
-Alongside the background agent, the installer adds a small CLI, `owm`, for
+Alongside the background agent, the installer adds a small CLI — `openwatch`
+(with `owm` kept as a short alias) — for
 checking on OpenWatchman and running things by hand:
 
 ```text
-owm status     installed? loaded? baseline date, recent activity
-owm preview    dry-run — what would move right now (moves nothing)
-owm sweep      dry-run a full one-time reconcile; 'owm sweep --apply' runs it
-owm run        trigger the agent to do a pass now
-owm logs       recent log lines ('owm logs -f' to follow)
-owm doctor     diagnostics, including a Full Disk Access hint
-owm help       all commands
+openwatch status     installed? loaded? baseline date, recent activity
+openwatch preview    dry-run — what would move right now (moves nothing)
+openwatch sweep      dry-run a full one-time reconcile; 'openwatch sweep --apply' runs it
+openwatch run        trigger the agent to do a pass now
+openwatch logs       recent log lines ('openwatch logs -f' to follow)
+openwatch doctor     diagnostics, including a Full Disk Access hint
+openwatch help       all commands
 ```
 
-If `owm` isn't on your `PATH` after install, add `~/.local/bin` to it (or
-invoke `~/.local/bin/owm`). From a clone you can also run `./bin/owm`.
+If `openwatch` isn't on your `PATH` after install, add `~/.local/bin` to it
+(or invoke `~/.local/bin/openwatch`). From a clone you can also run
+`./bin/owm`. `owm` is a short alias for the same command.
 
 ## How it works
 

@@ -4,6 +4,14 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.3.0] — 2026-07-01
+
+### Added
+- `openwatch` command. The CLI installs under the friendly name `openwatch`
+  (with `owm` kept as a short alias) and refers to itself by whatever name it
+  is invoked as, so its help and tips match the command you typed.
+  `install.sh` creates the `openwatch` command in `~/.local/bin`.
+
 ## [1.2.1] — 2026-07-01
 
 ### Fixed

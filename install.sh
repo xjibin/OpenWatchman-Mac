@@ -114,7 +114,9 @@ CLI_DEST="$HOME/.local/bin/owm"
 if [ -f "$CLI_SRC" ]; then
   cp "$CLI_SRC" "$CLI_DEST"
   chmod 755 "$CLI_DEST"
-  echo "      installed CLI: $CLI_DEST (run 'owm help')"
+  echo "      installed CLI: $CLI_DEST"
+  ln -sf "$CLI_DEST" "$HOME/.local/bin/openwatch" 2>/dev/null \
+    && echo "      linked command: openwatch (short alias: owm)"
 fi
 
 # --- 2. app wrapper ----------------------------------------------------------
@@ -222,11 +224,12 @@ You should see:  moved  <your file>  ->  $(date +%Y)/$(( 10#$(date +%m) ))/
 
 Useful afterwards:
 
-  Command-line interface ('owm help' for all commands):
-    owm status    # running? baseline, recent activity
-    owm preview   # dry-run: what would move now
-    owm doctor    # diagnostics + Full Disk Access hint
-  If 'owm' is not found, add ~/.local/bin to your PATH, or run ~/.local/bin/owm.
+  Command-line interface (run 'openwatch help' for all commands):
+    openwatch status    # running? baseline, recent activity
+    openwatch preview   # dry-run: what would move now
+    openwatch doctor    # diagnostics + Full Disk Access hint
+  If 'openwatch' is not found, add ~/.local/bin to your PATH (for zsh, add it in
+  ~/.zshrc), then reopen the terminal. You can also run ~/.local/bin/openwatch.
 
 
   Preview anytime (moves nothing):
