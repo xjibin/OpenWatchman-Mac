@@ -26,9 +26,11 @@ cannot do, and where the residual risk lives.
   refuses to run as root.
 - **No self-update, no telemetry, no analytics.** The script is exactly what
   you cloned until you change it yourself.
-- **No pre-built binaries.** The only compiled artifact — the app wrapper
+- **No pre-built executables.** The only compiled artifact — the app wrapper
   that carries Full Disk Access — is produced on your Mac at install time by
-  Apple's `osacompile`. This repository ships no binaries.
+  Apple's `osacompile`. The repository ships no executable or compiled code. The sole binary asset
+  is a static app icon (`assets/applet.icns`), which is image data and
+  contains no code.
 
 ## Trust boundaries and residual risk
 

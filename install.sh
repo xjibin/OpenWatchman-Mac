@@ -121,6 +121,15 @@ osacompile -o "$APP" \
 /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$APP/Contents/Info.plist"
 
 # ad-hoc signature keeps the TCC grant stable across reboots
+# apply the repo's app icon (if present) before signing
+ICON_SRC="$REPO_DIR/assets/applet.icns"
+if [ -f "$ICON_SRC" ]; then
+  cp "$ICON_SRC" "$APP/Contents/Resources/applet.icns"
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile applet" "$APP/Contents/Info.plist" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string applet" "$APP/Contents/Info.plist"
+  echo "      applied custom icon from assets/applet.icns"
+fi
+
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 APPLET="$APP/Contents/MacOS/applet"

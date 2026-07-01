@@ -4,6 +4,20 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.1.1] — 2026-07-01
+
+### Added
+- App icon. `assets/applet.icns` (a Liquid Glass rendering of the shield
+  emblem) is committed to the repo, and `install.sh` applies it to the
+  generated `OpenWatchman.app` before code-signing, so every install carries
+  the icon.
+
+### Changed
+- Documentation wording: the repo contains one binary *asset* (the app icon,
+  which is image data — not executable code). The trust guarantee is
+  unchanged: no pre-built *executables* ship in the repo; the only runnable
+  artifact, the app wrapper, is still generated locally at install time.
+
 ## [1.1.0] — 2026-07-01
 
 ### Added

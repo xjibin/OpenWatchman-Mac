@@ -28,10 +28,12 @@ This project is designed to be **verified, not believed**:
 - **One small script is the entire engine.** [`bin/openwatchman.sh`](bin/openwatchman.sh)
   is plain bash you can read top to bottom. The installer and uninstaller are
   equally short.
-- **No binaries in this repo — nothing pre-built to take on faith.** The app
+- **No pre-built executables in this repo — nothing runnable to take on faith.** The app
   wrapper that holds the Full Disk Access permission is generated **on your
   Mac, at install time**, by Apple's own `osacompile`. You can read the
-  one-line command it wraps in [`install.sh`](install.sh).
+  one-line command it wraps in [`install.sh`](install.sh). The only binary
+  file in the repo is a static app icon (`assets/applet.icns`) — image data,
+  not code.
 - **Zero network access. Zero telemetry. Zero dependencies** beyond tools
   that ship with macOS (`bash`, `mdls`, `date`, `stat`, `launchctl`,
   `osacompile`).
