@@ -119,6 +119,12 @@ if [ -f "$CLI_SRC" ]; then
     && echo "      linked command: openwatch (short alias: owm)"
 fi
 
+# record this clone's location so 'openwatch update' can find it later
+OWM_CONF_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman"
+mkdir -p "$OWM_CONF_DIR"
+printf '%s\n' "$REPO_DIR" > "$OWM_CONF_DIR/repo" \
+  && echo "      recorded repo path for 'openwatch update'"
+
 # --- 2. app wrapper ----------------------------------------------------------
 echo "[2/6] Building local app wrapper (osacompile)"
 mkdir -p "$HOME/Applications"

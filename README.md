@@ -197,6 +197,7 @@ openwatch sweep      dry-run a full one-time reconcile; 'openwatch sweep --apply
 openwatch run        trigger the agent to do a pass now
 openwatch logs       recent log lines ('openwatch logs -f' to follow)
 openwatch doctor     diagnostics, including a Full Disk Access hint
+openwatch update     git pull your clone and install the refreshed scripts here
 openwatch help       all commands
 ```
 

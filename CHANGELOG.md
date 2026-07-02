@@ -4,6 +4,17 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.4.0] — 2026-07-01
+
+### Added
+- `openwatch update` — updates this Mac in place. It locates your clone (a path
+  recorded at install time, the clone you run it from, or a short search of
+  common locations), runs `git pull --ff-only`, and copies the refreshed engine
+  and CLI into `~/.local/bin`. It never touches your baseline or Full Disk
+  Access; if a release also changed the app or LaunchAgent it says so and points
+  you at `./install.sh --keep-baseline`. If no clone is found it offers to clone
+  one (opt-in) or prints how.
+
 ## [1.3.0] — 2026-07-01
 
 ### Added

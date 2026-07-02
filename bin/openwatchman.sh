@@ -54,7 +54,7 @@
 
 set -u
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 
 WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
 MARKER="$WATCH_DIR/.openwatchman-baseline"
