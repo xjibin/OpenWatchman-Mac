@@ -4,6 +4,42 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.6.0] — 2026-07-03
+
+### Added
+- **Opt-in notifications (`notify`, default `off`).** With `notify=on` (or
+  `OPENWATCHMAN_NOTIFY=on`), the engine sends exactly **one** macOS
+  notification per pass that filed at least one file — never one per file.
+  Only counts and watch-folder names are interpolated into the AppleScript
+  string (never file names), with quotes and backslashes stripped, so no name
+  can break out of it. A failing `osascript` never fails the run; dry runs and
+  `undo` never notify.
+- **Date format (`date_format`, default `yyyy/m`).** Destination folder shape:
+  `yyyy/m` (today's `2026/7`), `yyyy/mm` (`2026/07`), or `yyyy-mm` (single
+  top-level `2026-07` folder). Nested formats reuse a numerically-equal month
+  folder of either padding style, so a month is never split across `7` and
+  `07`, and reconciliation compares months numerically so a file is never
+  relocated over zero-padding. Switching formats migrates nothing: folders the
+  new format doesn't recognize simply stop being managed.
+- **Multiple watch folders (`watch`).** A colon-separated list of up to 4
+  absolute paths that replaces the default `~/Downloads`. Each folder keeps
+  its own baseline marker; a configured folder without one is **never sorted
+  on sight** — the first pass only initializes its marker. With several
+  folders, log lines carry a `[folder]` prefix and `openwatch status` /
+  `doctor` report each folder and baseline. `install.sh` renders one
+  WatchPaths entry per folder; a folder added after install is picked up by
+  the periodic 5-minute run (the `config` setter says so and points at
+  `./install.sh --keep-baseline`). `OPENWATCHMAN_DIR` still forces a single
+  folder and ignores the list.
+- **Dataless-file guard.** Files whose BSD flags include `SF_DATALESS`
+  (iCloud placeholders) are skipped silently, so a move can never force a
+  download.
+
+### Notes
+- **Defaults preserve existing behavior.** With nothing configured — no
+  notify, no date_format, no watch list — sorting, folder shapes, log format,
+  and baseline handling are exactly as in 1.5.0.
+
 ## [1.5.0] — 2026-07-03
 
 ### Added

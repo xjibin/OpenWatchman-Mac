@@ -12,10 +12,12 @@
     <string>@APPLET@</string>
   </array>
 
-  <!-- Fires whenever anything in the watched folder's top level changes. -->
+  <!-- Fires whenever anything in a watched folder's top level changes.
+       The installer expands @WATCH_PATHS@ to one <string> entry per
+       effective watch folder (the config's watch= list, or the default). -->
   <key>WatchPaths</key>
   <array>
-    <string>@WATCH_DIR@</string>
+@WATCH_PATHS@
   </array>
 
   <!-- Also fires once at every login (covers "first unlock of a new month"

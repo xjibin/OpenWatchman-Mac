@@ -170,10 +170,29 @@ fi
 # --- 4. LaunchAgent ----------------------------------------------------------
 echo "[4/6] Installing LaunchAgent"
 mkdir -p "$(dirname "$PLIST")"
+
+# WatchPaths: one <string> per effective watch folder — the env override
+# (single dir) beats the config's watch= list, which beats the default.
+STATE_CONF="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman/config"
+WATCH_LIST="$WATCH_DIR"
+if [ -z "${OPENWATCHMAN_DIR:-}" ] && [ -f "$STATE_CONF" ]; then
+  while IFS= read -r conf_line || [ -n "$conf_line" ]; do
+    case "$conf_line" in watch=*) WATCH_LIST="${conf_line#watch=}" ;; esac
+  done < "$STATE_CONF"
+fi
+
 sed -e "s|@APPLET@|$APPLET|g" \
-    -e "s|@WATCH_DIR@|$WATCH_DIR|g" \
     -e "s|@HOME@|$HOME|g" \
-    "$PLIST_TEMPLATE" > "$PLIST"
+    "$PLIST_TEMPLATE" | awk -v paths="$WATCH_LIST" '
+  /@WATCH_PATHS@/ {
+    n = split(paths, parts, ":")
+    for (i = 1; i <= n; i++) {
+      if (parts[i] != "") printf "    <string>%s</string>\n", parts[i]
+    }
+    next
+  }
+  { print }
+' > "$PLIST"
 plutil -lint "$PLIST" >/dev/null
 
 # --- 5. load -----------------------------------------------------------------

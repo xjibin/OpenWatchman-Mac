@@ -13,8 +13,7 @@ set -u
 
 PROG="$(basename -- "$0")"
 LABEL="com.openwatchman.agent"
-WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
-MARKER="$WATCH_DIR/.openwatchman-baseline"
+WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"   # refined after config is read
 LOG="$HOME/Library/Logs/openwatchman.log"
 ERRLOG="$HOME/Library/Logs/openwatchman.err.log"
 APP="$HOME/Applications/OpenWatchman.app"
@@ -87,8 +86,12 @@ Usage: $PROG <command>
   version    print version
   help       this help
 
-Watched folder: $WATCH_DIR   (override with OPENWATCHMAN_DIR)
 EOF
+  if [ "$WATCH_COUNT" -gt 1 ]; then
+    echo "Watched folders: $WATCH_COUNT configured (run '$PROG status' to list them)"
+  else
+    echo "Watched folder: $WATCH_DIR   (override with OPENWATCHMAN_DIR)"
+  fi
 }
 
 need_macos() {
@@ -100,9 +103,10 @@ require_engine() {
     exit 1; }
 }
 loaded() { launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; }
-baseline_date() {
-  [ -f "$MARKER" ] || { echo "none"; return; }
-  date -r "$(cat "$MARKER" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unreadable"
+baseline_date_of() {
+  local m="$1/.openwatchman-baseline"
+  [ -f "$m" ] || { echo "none"; return; }
+  date -r "$(cat "$m" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unreadable"
 }
 
 # parse a duration — bare seconds or <n>s/m/h/d — into seconds on stdout.
@@ -125,18 +129,46 @@ parse_duration() {
 # read the config file into CFG_* vars — whitelisted keys only, never sourced
 CFG_MIN_AGE=""
 CFG_ON_DUPLICATE=""
+CFG_NOTIFY=""
+CFG_DATE_FORMAT=""
+CFG_WATCH=""
 read_config() {
   CFG_MIN_AGE=""
   CFG_ON_DUPLICATE=""
+  CFG_NOTIFY=""
+  CFG_DATE_FORMAT=""
+  CFG_WATCH=""
   [ -f "$CONFIG" ] || return 0
   local line
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in
       min_age=*)      CFG_MIN_AGE="${line#min_age=}" ;;
       on_duplicate=*) CFG_ON_DUPLICATE="${line#on_duplicate=}" ;;
+      notify=*)       CFG_NOTIFY="${line#notify=}" ;;
+      date_format=*)  CFG_DATE_FORMAT="${line#date_format=}" ;;
+      watch=*)        CFG_WATCH="${line#watch=}" ;;
     esac
   done < "$CONFIG"
   return 0
+}
+
+# echo each effective watch folder, one per line: OPENWATCHMAN_DIR (single)
+# beats the config's watch= list (which REPLACES the default), which beats
+# the default ~/Downloads. Mirrors the engine's resolution exactly.
+watch_dirs() {
+  if [ -n "${OPENWATCHMAN_DIR:-}" ]; then
+    printf '%s\n' "$OPENWATCHMAN_DIR"
+  elif [ -n "$CFG_WATCH" ]; then
+    local rest entry
+    rest="$CFG_WATCH"
+    while [ -n "$rest" ]; do
+      entry="${rest%%:*}"
+      if [ "$rest" = "$entry" ]; then rest=""; else rest="${rest#*:}"; fi
+      if [ -n "$entry" ]; then printf '%s\n' "$entry"; fi
+    done
+  else
+    printf '%s\n' "$HOME/Downloads"
+  fi
 }
 
 # echo "<effective value> <provenance>" for a key, resolving exactly the way
@@ -161,7 +193,106 @@ setting_of() {
         *) echo "rename default" ;;
       esac
       ;;
+    notify)
+      if [ -n "${OPENWATCHMAN_NOTIFY:-}" ]; then raw="$OPENWATCHMAN_NOTIFY"; src="env"
+      elif [ -n "$CFG_NOTIFY" ]; then raw="$CFG_NOTIFY"; src="config"; fi
+      case "$raw" in
+        on)  echo "on $src" ;;
+        off) echo "off $src" ;;
+        *)   echo "off default" ;;
+      esac
+      ;;
+    date_format)
+      if [ -n "${OPENWATCHMAN_DATE_FORMAT:-}" ]; then raw="$OPENWATCHMAN_DATE_FORMAT"; src="env"
+      elif [ -n "$CFG_DATE_FORMAT" ]; then raw="$CFG_DATE_FORMAT"; src="config"; fi
+      case "$raw" in
+        yyyy/m|yyyy/mm|yyyy-mm) echo "$raw $src" ;;
+        *) echo "yyyy/m default" ;;
+      esac
+      ;;
+    watch)
+      if [ -n "${OPENWATCHMAN_DIR:-}" ]; then echo "$OPENWATCHMAN_DIR env"
+      elif [ -n "$CFG_WATCH" ]; then echo "$CFG_WATCH config"
+      else echo "$HOME/Downloads default"; fi
+      ;;
   esac
+}
+
+# validate a colon-separated watch list: each entry must be an absolute path
+# to an existing directory; reject /, $HOME itself, duplicates, more than 4
+# entries, and any entry nested inside another. Prints one reason on stderr.
+# On success, VALIDATED_WATCH holds the list with trailing slashes stripped.
+VALIDATED_WATCH=""
+validate_watch() {
+  local list="$1" rest entry e n=0 i j
+  ents=()
+  if [ -z "$list" ]; then
+    echo "$PROG: watch list is empty — give one to four absolute paths, colon-separated." >&2
+    return 1
+  fi
+  rest="$list"
+  while [ -n "$rest" ]; do
+    entry="${rest%%:*}"
+    if [ "$rest" = "$entry" ]; then rest=""; else rest="${rest#*:}"; fi
+    if [ -z "$entry" ]; then
+      echo "$PROG: watch list has an empty entry — check the colons." >&2
+      return 1
+    fi
+    case "$entry" in
+      /*) ;;
+      *) echo "$PROG: not an absolute path: $entry" >&2; return 1 ;;
+    esac
+    e="${entry%/}"
+    if [ -z "$e" ]; then
+      echo "$PROG: refusing to watch the filesystem root." >&2
+      return 1
+    fi
+    if [ "$e" = "${HOME%/}" ]; then
+      echo "$PROG: refusing to watch your entire home folder — pick subfolders." >&2
+      return 1
+    fi
+    if [ ! -d "$e" ]; then
+      echo "$PROG: not an existing directory: $entry" >&2
+      return 1
+    fi
+    n=$((n + 1))
+    if [ "$n" -gt 4 ]; then
+      echo "$PROG: too many watch folders (max 4)." >&2
+      return 1
+    fi
+    ents[n]="$e"
+  done
+  i=1
+  while [ "$i" -le "$n" ]; do
+    j=$((i + 1))
+    while [ "$j" -le "$n" ]; do
+      if [ "${ents[i]}" = "${ents[j]}" ]; then
+        echo "$PROG: duplicate watch folder: ${ents[i]}" >&2
+        return 1
+      fi
+      case "${ents[j]}" in "${ents[i]}"/*)
+        echo "$PROG: ${ents[j]} is nested inside ${ents[i]} — watch only the outer one." >&2
+        return 1 ;;
+      esac
+      case "${ents[i]}" in "${ents[j]}"/*)
+        echo "$PROG: ${ents[i]} is nested inside ${ents[j]} — watch only the outer one." >&2
+        return 1 ;;
+      esac
+      j=$((j + 1))
+    done
+    i=$((i + 1))
+  done
+  VALIDATED_WATCH=""
+  i=1
+  while [ "$i" -le "$n" ]; do
+    if [ -z "$VALIDATED_WATCH" ]; then
+      VALIDATED_WATCH="${ents[i]}"
+    else
+      VALIDATED_WATCH="$VALIDATED_WATCH:${ents[i]}"
+    fi
+    i=$((i + 1))
+  done
+  return 0
 }
 
 # echo a human description of an ACTIVE pause; fail if not (or no longer) paused
@@ -197,8 +328,12 @@ cmd_status() {
   if pstate="$(pause_state)"; then
     echo "${Y}‖${N} $pstate — '$PROG resume' to re-enable sorting"
   fi
-  echo "  watched : $WATCH_DIR"
-  echo "  baseline: $(baseline_date)  (only files added after this are eligible)"
+  while IFS= read -r wd; do
+    echo "  watched : $wd"
+    echo "  baseline: $(baseline_date_of "$wd")  (only files added after this are eligible)"
+  done <<EOF
+$(watch_dirs)
+EOF
   echo "  recent activity:"
   if [ -f "$LOG" ]; then tail -n 5 "$LOG" | sed 's/^/    /'; else echo "    (no log yet)"; fi
 }
@@ -330,7 +465,11 @@ cmd_undo() {
   while [ "$k" -ge 0 ]; do
     i="${sel[k]}"
     src="${j_src[i]}"; dst="${j_dst[i]}"
-    from="${dst#"$WATCH_DIR"/}"; to="${src#"$WATCH_DIR"/}"
+    if [ "$WATCH_COUNT" -eq 1 ]; then
+      from="${dst#"$WATCH_DIR"/}"; to="${src#"$WATCH_DIR"/}"
+    else
+      from="$dst"; to="$src"     # several watch folders: absolute is unambiguous
+    fi
     if [ ! -f "$dst" ]; then
       gone=$((gone + 1))
       echo "  skip     $from  ->  $to  ${D}(file moved since)${N}"
@@ -412,17 +551,21 @@ cmd_config() {
   fi
 
   # no arguments: print every effective setting with its provenance
+  # (the provenance is the word after the LAST space — paths may contain spaces)
   if [ "$#" -eq 0 ]; then
-    v="$(setting_of min_age)";      echo "min_age = ${v% *}  (${v#* })"
-    v="$(setting_of on_duplicate)"; echo "on_duplicate = ${v% *}  (${v#* })"
+    v="$(setting_of min_age)";      echo "min_age = ${v% *}  (${v##* })"
+    v="$(setting_of on_duplicate)"; echo "on_duplicate = ${v% *}  (${v##* })"
+    v="$(setting_of notify)";       echo "notify = ${v% *}  (${v##* })"
+    v="$(setting_of date_format)";  echo "date_format = ${v% *}  (${v##* })"
+    v="$(setting_of watch)";        echo "watch = ${v% *}  (${v##* })"
     echo
     echo "${D}Config file: $CONFIG   ('$PROG config KEY VALUE' to change)${N}"
     return 0
   fi
 
   case "$key" in
-    min_age|on_duplicate) ;;
-    *) echo "$PROG: unknown config key: $key (known keys: min_age, on_duplicate)" >&2; exit 1 ;;
+    min_age|on_duplicate|notify|date_format|watch) ;;
+    *) echo "$PROG: unknown config key: $key (known keys: min_age, on_duplicate, notify, date_format, watch)" >&2; exit 1 ;;
   esac
 
   # one argument: print that key's effective value
@@ -432,7 +575,7 @@ cmd_config() {
     return 0
   fi
 
-  # two arguments: validate, then rewrite the file keeping the other key
+  # two arguments: validate, then rewrite the file keeping the other keys
   case "$key" in
     min_age)
       if ! parse_duration "$val" >/dev/null; then
@@ -444,6 +587,21 @@ cmd_config() {
         rename|skip|trash) ;;
         *) echo "$PROG: invalid on_duplicate '$val' — use rename, skip, or trash." >&2; exit 1 ;;
       esac ;;
+    notify)
+      case "$val" in
+        on|off) ;;
+        *) echo "$PROG: invalid notify '$val' — use on or off." >&2; exit 1 ;;
+      esac ;;
+    date_format)
+      case "$val" in
+        yyyy/m|yyyy/mm|yyyy-mm) ;;
+        *) echo "$PROG: invalid date_format '$val' — use yyyy/m, yyyy/mm, or yyyy-mm." >&2; exit 1 ;;
+      esac ;;
+    watch)
+      if ! validate_watch "$val"; then
+        exit 1
+      fi
+      val="$VALIDATED_WATCH" ;;
   esac
   mkdir -p "$STATE_DIR"
   # temp file next to the config so the final mv is an atomic rename
@@ -453,9 +611,22 @@ cmd_config() {
     elif [ -n "$CFG_MIN_AGE" ]; then printf 'min_age=%s\n' "$CFG_MIN_AGE"; fi
     if [ "$key" = "on_duplicate" ]; then printf 'on_duplicate=%s\n' "$val"
     elif [ -n "$CFG_ON_DUPLICATE" ]; then printf 'on_duplicate=%s\n' "$CFG_ON_DUPLICATE"; fi
+    if [ "$key" = "notify" ]; then printf 'notify=%s\n' "$val"
+    elif [ -n "$CFG_NOTIFY" ]; then printf 'notify=%s\n' "$CFG_NOTIFY"; fi
+    if [ "$key" = "date_format" ]; then printf 'date_format=%s\n' "$val"
+    elif [ -n "$CFG_DATE_FORMAT" ]; then printf 'date_format=%s\n' "$CFG_DATE_FORMAT"; fi
+    if [ "$key" = "watch" ]; then printf 'watch=%s\n' "$val"
+    elif [ -n "$CFG_WATCH" ]; then printf 'watch=%s\n' "$CFG_WATCH"; fi
   } > "$tmp"
   mv "$tmp" "$CONFIG"
   echo "$key = $val  (saved to $CONFIG)"
+  if [ "$key" = "watch" ]; then
+    echo
+    echo "Note: the agent reacts INSTANTLY only to the folders baked into its"
+    echo "LaunchAgent (WatchPaths) at install time; a newly configured folder is"
+    echo "still sorted by the periodic run every 5 minutes. To refresh WatchPaths"
+    echo "for instant reaction, run:  ./install.sh --keep-baseline"
+  fi
 }
 
 cmd_update() {
@@ -565,7 +736,21 @@ cmd_doctor() {
   else
     warn "agent not loaded"
   fi
-  if [ -f "$MARKER" ]; then ok "baseline marker present ($(baseline_date))"; else warn "baseline marker missing"; fi
+  while IFS= read -r wd; do
+    if [ ! -d "$wd" ]; then
+      warn "watch folder missing: $wd"
+    elif [ ! -f "$wd/.openwatchman-baseline" ]; then
+      if [ "$WATCH_SRC" = "config" ]; then
+        warn "no baseline in $wd yet — the next agent pass initializes it"
+      else
+        warn "baseline marker missing"
+      fi
+    else
+      ok "watching $wd  (baseline $(baseline_date_of "$wd"))"
+    fi
+  done <<EOF
+$(watch_dirs)
+EOF
   probe="$(find "$WATCH_DIR" -maxdepth 3 -type f ! -name '.*' 2>/dev/null | head -1)"
   if [ -z "$probe" ]; then
     ok "Spotlight check skipped (no files under $WATCH_DIR yet)"
@@ -586,6 +771,23 @@ cmd_doctor() {
   echo
   echo "${D}Tip: '$PROG preview' shows what would move now; download a file, then '$PROG logs'.${N}"
 }
+
+# --- effective watch folders (config-aware), then dispatch -------------------
+read_config
+if [ -n "${OPENWATCHMAN_DIR:-}" ]; then
+  WATCH_SRC="env"
+elif [ -n "$CFG_WATCH" ]; then
+  WATCH_SRC="config"
+else
+  WATCH_SRC="default"
+fi
+WATCH_COUNT=0
+while IFS= read -r wd_line; do
+  WATCH_COUNT=$((WATCH_COUNT + 1))
+  if [ "$WATCH_COUNT" -eq 1 ]; then WATCH_DIR="$wd_line"; fi
+done <<EOF
+$(watch_dirs)
+EOF
 
 cmd="${1:-}"; if [ "$#" -gt 0 ]; then shift; fi
 case "$cmd" in

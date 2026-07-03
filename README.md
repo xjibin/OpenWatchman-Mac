@@ -54,8 +54,9 @@ This project is designed to be **verified, not believed**:
    modification time is used instead, and a file with **no readable date is
    skipped — a missing date is never treated as "new".**
 4. **In-progress downloads are skipped** (`.crdownload`, `.download`,
-   `.part`, `.partial`, `.tmp`), and a file's size must hold steady for a
-   second before it is moved.
+   `.part`, `.partial`, `.tmp`), dataless iCloud placeholder files are never
+   touched (so a move can never force a download), and a file's size must
+   hold steady for a second before it is moved.
 5. **Nothing is ever overwritten.** A name collision gets a timestamp suffix.
 6. **Every move is logged** to `~/Library/Logs/openwatchman.log`.
 7. **Dry-run everything.** `--dry-run` prints exactly what would move, moves
@@ -186,7 +187,8 @@ OPENWATCHMAN_BASELINE=1 ~/.local/bin/openwatchman.sh
 
 Watching a different folder: set it at install time —
 `OPENWATCHMAN_DIR="$HOME/Desktop" ./install.sh`. The chosen folder is baked
-into the agent and the app wrapper. (v1 watches one folder per install.)
+into the agent and the app wrapper. To watch **several** folders, use the
+`watch` config key (see Configuration below).
 
 ## Command-line interface
 
@@ -224,6 +226,9 @@ never executed — and unknown keys or values are simply ignored.
 |---|---|---|
 | `min_age` | `0` | settle delay: a file moves only once it has been in the folder this long — bare seconds or `<n>s/m/h/d` (e.g. `90`, `45m`, `1h`) |
 | `on_duplicate` | `rename` | name collision where the file is **byte-identical** to the one already at the destination: `rename` keeps today's timestamp-suffix behavior, `skip` leaves the newcomer where it is, `trash` moves it to the Trash. Different content always falls back to `rename`. |
+| `notify` | `off` | `on` sends **one** macOS notification per pass that filed at least one file (never one per file). Only counts and folder names appear in it — never file names. |
+| `date_format` | `yyyy/m` | shape of destination folders: `yyyy/m` (today's `2026/7`), `yyyy/mm` (`2026/07`), or `yyyy-mm` (a single top-level `2026-07` folder, no nesting). |
+| `watch` | `~/Downloads` | colon-separated list of up to 4 absolute folder paths to watch. The list **replaces** the default. Each folder gets its own baseline marker; a newly added folder is never sorted on sight — its first pass only writes the marker. |
 
 Set them with the CLI rather than by hand:
 
@@ -232,8 +237,26 @@ openwatch config min_age 1h   # move files only after they've settled for an hou
 openwatch config              # show effective settings and where each comes from
 ```
 
-The environment variables `OPENWATCHMAN_MIN_AGE` and
-`OPENWATCHMAN_ON_DUPLICATE` override the file (handy for one-off runs).
+The environment variables `OPENWATCHMAN_MIN_AGE`, `OPENWATCHMAN_ON_DUPLICATE`,
+`OPENWATCHMAN_NOTIFY`, and `OPENWATCHMAN_DATE_FORMAT` override the file (handy
+for one-off runs); `OPENWATCHMAN_DIR` watches a single folder and ignores the
+`watch` list entirely.
+
+A few caveats, stated plainly:
+
+- **Notifications**: on modern macOS the first notification may require
+  allowing notifications for "Script Editor"/osascript in System Settings →
+  Notifications; nothing appears until it's allowed.
+- **`date_format` never migrates anything.** Switching formats only changes
+  where *new* folders are created. Old-format folders the new format doesn't
+  recognize simply stop being managed — files in them are left alone forever.
+  Within the nested formats, months are compared numerically, so `2026/7` and
+  `2026/07` are the same month: an existing folder of either padding is reused
+  and a correctly-placed file is never moved over zero-padding.
+- **`watch` and instant reaction**: the agent reacts instantly only to folders
+  baked into its LaunchAgent (WatchPaths) at install time. A folder configured
+  afterwards is still sorted — by the periodic run every 5 minutes. Run
+  `./install.sh --keep-baseline` to refresh WatchPaths for instant reaction.
 
 ## How it works
 
