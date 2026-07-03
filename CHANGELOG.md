@@ -4,6 +4,43 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.5.0] — 2026-07-03
+
+### Added
+- **Move journal + `openwatch undo`.** Every real move the engine makes is
+  appended to a tab-separated journal in `~/.local/share/openwatchman/`
+  (honoring `$XDG_DATA_HOME`). `openwatch undo` prints a dry-run restore plan
+  for the last sorting run — classifying each file as restorable, moved since,
+  or blocked by an occupied slot — and `openwatch undo --apply` puts the
+  restorable ones back (never overwriting anything). Restores are journaled
+  too, so a further `undo` targets the run before. The journal is trimmed
+  automatically (to its last 1000 lines once it passes 2000).
+- **Settle delay (`min_age`).** Optional: a file becomes eligible only once
+  its date-added — the same clock that picks the month — is at least this old.
+  Bare seconds or `<n>s/m/h/d` (e.g. `45m`, `1h`), set via
+  `openwatch config min_age 1h` or the `OPENWATCHMAN_MIN_AGE` environment
+  variable. Default `0` (off).
+- **Duplicate handling (`on_duplicate`).** Optional: when a name collision is
+  **byte-identical** (same size and same SHA-256) to the file already at the
+  destination, `skip` leaves the newcomer in place and `trash` moves it to the
+  Trash (journaled, so `undo` can restore it). Different content — and the
+  default, `rename` — keep today's timestamp-suffix behavior. Hashing only
+  runs on size-equal collisions.
+- **Pause / resume.** `openwatch pause` (indefinite) or `openwatch pause 30m|2h|1d`
+  suspends all sorting via a flag file the engine checks before doing anything;
+  an expired pause clears itself. `openwatch resume` re-enables sorting, and
+  `openwatch status` / `openwatch doctor` surface the paused state prominently.
+- **`openwatch config`** — show effective settings with provenance
+  (env / config / default), get one value, or set one. The config file is a
+  strict key=value whitelist and is never sourced.
+- `uninstall.sh` now also removes the state folder (journal, config, pause
+  flag, repo record).
+
+### Notes
+- **Defaults preserve existing behavior.** With nothing configured, the only
+  change on upgrade is that moves are journaled; sorting, collisions, and
+  timing behave exactly as in 1.4.0.
+
 ## [1.4.0] — 2026-07-01
 
 ### Added

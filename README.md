@@ -60,6 +60,10 @@ This project is designed to be **verified, not believed**:
 6. **Every move is logged** to `~/Library/Logs/openwatchman.log`.
 7. **Dry-run everything.** `--dry-run` prints exactly what would move, moves
    nothing, and always ends with a summary line — it is never silent.
+8. **Undo.** Every move is also journaled, so `openwatch undo` shows what the
+   last run did and `openwatch undo --apply` puts it back.
+9. **Pause.** `openwatch pause 2h` (or plain `pause`) suspends all sorting;
+   `openwatch resume` re-enables it.
 
 ### Audit it yourself in a few minutes
 
@@ -191,10 +195,14 @@ Alongside the background agent, the installer adds a small CLI — `openwatch`
 checking on OpenWatchman and running things by hand:
 
 ```text
-openwatch status     installed? loaded? baseline date, recent activity
+openwatch status     installed? loaded? paused? baseline date, recent activity
 openwatch preview    dry-run — what would move right now (moves nothing)
 openwatch sweep      dry-run a full one-time reconcile; 'openwatch sweep --apply' runs it
 openwatch run        trigger the agent to do a pass now
+openwatch undo       show what the last run moved; 'openwatch undo --apply' puts it back
+openwatch pause      suspend sorting — 'openwatch pause 2h' for a while, bare for until-resumed
+openwatch resume     re-enable sorting after a pause
+openwatch config     show settings; 'openwatch config min_age 1h' sets one
 openwatch logs       recent log lines ('openwatch logs -f' to follow)
 openwatch doctor     diagnostics, including a Full Disk Access hint
 openwatch update     git pull your clone and install the refreshed scripts here
@@ -204,6 +212,28 @@ openwatch help       all commands
 If `openwatch` isn't on your `PATH` after install, add `~/.local/bin` to it
 (or invoke `~/.local/bin/openwatch`). From a clone you can also run
 `./bin/owm`. `owm` is a short alias for the same command.
+
+### Configuration
+
+Everything works with zero configuration; two optional settings live in a
+plain key=value file at `~/.local/share/openwatchman/config` (honoring
+`$XDG_DATA_HOME`). The file is read line by line against a whitelist — it is
+never executed — and unknown keys or values are simply ignored.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `min_age` | `0` | settle delay: a file moves only once it has been in the folder this long — bare seconds or `<n>s/m/h/d` (e.g. `90`, `45m`, `1h`) |
+| `on_duplicate` | `rename` | name collision where the file is **byte-identical** to the one already at the destination: `rename` keeps today's timestamp-suffix behavior, `skip` leaves the newcomer where it is, `trash` moves it to the Trash. Different content always falls back to `rename`. |
+
+Set them with the CLI rather than by hand:
+
+```bash
+openwatch config min_age 1h   # move files only after they've settled for an hour
+openwatch config              # show effective settings and where each comes from
+```
+
+The environment variables `OPENWATCHMAN_MIN_AGE` and
+`OPENWATCHMAN_ON_DUPLICATE` override the file (handy for one-off runs).
 
 ## How it works
 

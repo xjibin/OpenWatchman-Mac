@@ -19,8 +19,13 @@ LOG="$HOME/Library/Logs/openwatchman.log"
 ERRLOG="$HOME/Library/Logs/openwatchman.err.log"
 APP="$HOME/Applications/OpenWatchman.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-REPO_CONF="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman/repo"
+STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman"
+JOURNAL="$STATE_DIR/journal.tsv"   # move journal the engine writes; 'undo' reads it
+CONFIG="$STATE_DIR/config"         # optional key=value settings (never sourced)
+PAUSE="$STATE_DIR/paused"          # expiry epoch; 0 = paused until resumed
+REPO_CONF="$STATE_DIR/repo"
 REPO_URL="https://github.com/xjibin/OpenWatchman-Mac.git"
+TAB=$'\t'
 
 # --- resolve where this script lives (portable; macOS has no readlink -f) ---
 SOURCE="${BASH_SOURCE[0]}"
@@ -68,10 +73,14 @@ usage() {
   cat <<EOF
 Usage: $PROG <command>
 
-  status     installed? loaded? baseline date, recent activity
+  status     installed? loaded? paused? baseline date, recent activity
   preview    dry-run — what would move right now (moves nothing)
   sweep      dry-run a full one-time reconcile; '$PROG sweep --apply' runs it
   run        trigger the agent to do a pass now
+  undo       show what the last run moved; '$PROG undo --apply' puts it back
+  pause      suspend sorting — '$PROG pause 2h' for a while, bare for until-resumed
+  resume     re-enable sorting after a pause
+  config     show settings; '$PROG config min_age 1h' sets one
   logs       recent log lines ('$PROG logs -f' to follow)
   doctor     diagnostics, incl. a Full Disk Access hint
   update     git pull your clone and install the refreshed scripts here
@@ -96,6 +105,80 @@ baseline_date() {
   date -r "$(cat "$MARKER" 2>/dev/null)" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "unreadable"
 }
 
+# parse a duration — bare seconds or <n>s/m/h/d — into seconds on stdout.
+# Fails on anything else. (Kept byte-identical with the copy in
+# bin/openwatchman.sh — update both together.)
+parse_duration() {
+  local v="$1" n mult
+  case "$v" in ''|*[!0-9smhd]*) return 1 ;; esac
+  case "$v" in
+    *s) n="${v%s}"; mult=1 ;;
+    *m) n="${v%m}"; mult=60 ;;
+    *h) n="${v%h}"; mult=3600 ;;
+    *d) n="${v%d}"; mult=86400 ;;
+    *)  n="$v";     mult=1 ;;
+  esac
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  echo $(( 10#$n * mult ))
+}
+
+# read the config file into CFG_* vars — whitelisted keys only, never sourced
+CFG_MIN_AGE=""
+CFG_ON_DUPLICATE=""
+read_config() {
+  CFG_MIN_AGE=""
+  CFG_ON_DUPLICATE=""
+  [ -f "$CONFIG" ] || return 0
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      min_age=*)      CFG_MIN_AGE="${line#min_age=}" ;;
+      on_duplicate=*) CFG_ON_DUPLICATE="${line#on_duplicate=}" ;;
+    esac
+  done < "$CONFIG"
+  return 0
+}
+
+# echo "<effective value> <provenance>" for a key, resolving exactly the way
+# the engine does: environment beats config beats default; invalid -> default.
+setting_of() {
+  local key="$1" raw="" src="default" secs
+  case "$key" in
+    min_age)
+      if [ -n "${OPENWATCHMAN_MIN_AGE:-}" ]; then raw="$OPENWATCHMAN_MIN_AGE"; src="env"
+      elif [ -n "$CFG_MIN_AGE" ]; then raw="$CFG_MIN_AGE"; src="config"; fi
+      if [ -n "$raw" ] && secs="$(parse_duration "$raw")" && [ -n "$secs" ]; then
+        echo "$raw $src"
+      else
+        echo "0 default"
+      fi
+      ;;
+    on_duplicate)
+      if [ -n "${OPENWATCHMAN_ON_DUPLICATE:-}" ]; then raw="$OPENWATCHMAN_ON_DUPLICATE"; src="env"
+      elif [ -n "$CFG_ON_DUPLICATE" ]; then raw="$CFG_ON_DUPLICATE"; src="config"; fi
+      case "$raw" in
+        rename|skip|trash) echo "$raw $src" ;;
+        *) echo "rename default" ;;
+      esac
+      ;;
+  esac
+}
+
+# echo a human description of an ACTIVE pause; fail if not (or no longer) paused
+pause_state() {
+  [ -f "$PAUSE" ] || return 1
+  local ep
+  ep="$(cat "$PAUSE" 2>/dev/null)"
+  case "$ep" in ''|*[!0-9]*) ep=0 ;; esac   # unreadable = engine stays paused
+  if [ "$ep" -eq 0 ]; then
+    echo "paused indefinitely"
+  elif [ "$ep" -gt "$(date +%s)" ]; then
+    echo "paused until $(date -r "$ep" '+%Y-%m-%d %H:%M')"
+  else
+    return 1    # expired — the engine clears the flag on its next run
+  fi
+}
+
 # is $1 a git checkout of the OpenWatchman-Mac repo?
 is_repo() {
   [ -n "${1:-}" ] || return 1
@@ -111,6 +194,9 @@ cmd_status() {
   need_macos
   banner
   if loaded; then echo "${G}●${N} agent loaded  ($LABEL)"; else echo "${Y}○${N} agent not loaded — run ./install.sh"; fi
+  if pstate="$(pause_state)"; then
+    echo "${Y}‖${N} $pstate — '$PROG resume' to re-enable sorting"
+  fi
   echo "  watched : $WATCH_DIR"
   echo "  baseline: $(baseline_date)  (only files added after this are eligible)"
   echo "  recent activity:"
@@ -152,6 +238,224 @@ cmd_run() {
 cmd_logs() {
   [ -f "$LOG" ] || { echo "No log yet at $LOG"; exit 0; }
   if [ "${1:-}" = "-f" ]; then tail -f "$LOG"; else tail -n 20 "$LOG"; fi
+}
+
+# --- undo: read the engine's move journal and reverse the last sorting run ---
+# The journal is TSV: epoch, run id, verb, source, destination. Verbs 'moved'
+# and 'relocated' are undoable; 'undone' records a past restore; a line with
+# verb 'unjournalable' stands in for a move whose paths couldn't be journaled.
+
+# journal line $1 recorded src -> dst; was it reversed by a LATER 'undone' line?
+move_was_undone() {
+  local i="$1" k
+  k=$((i + 1))
+  while [ "$k" -lt "$jn" ]; do
+    if [ "${j_verb[k]}" = "undone" ] \
+       && [ "${j_src[k]}" = "${j_dst[i]}" ] && [ "${j_dst[k]}" = "${j_src[i]}" ]; then
+      return 0
+    fi
+    k=$((k + 1))
+  done
+  return 1
+}
+
+cmd_undo() {
+  need_macos
+  local apply=0
+  case "${1:-}" in
+    "")      ;;
+    --apply) apply=1 ;;
+    *) echo "$PROG: unknown option for undo: $1 (try '$PROG undo' or '$PROG undo --apply')" >&2; exit 1 ;;
+  esac
+
+  if [ ! -s "$JOURNAL" ]; then
+    echo "Nothing to undo — no moves journaled yet. (The journal appears at"
+    echo "$JOURNAL after the first sorted file.)"
+    exit 0
+  fi
+
+  # load the journal into parallel arrays (bash 3.2 — no mapfile)
+  j_rid=(); j_verb=(); j_src=(); j_dst=()
+  jn=0
+  local rid verb src dst
+  while IFS="$TAB" read -r _ rid verb src dst; do
+    [ -n "$verb" ] || continue
+    j_rid[jn]="$rid"; j_verb[jn]="$verb"; j_src[jn]="$src"; j_dst[jn]="$dst"
+    jn=$((jn + 1))
+  done < "$JOURNAL"
+
+  # the target run: newest moved/relocated line not already reversed by an
+  # undo (runs that are only 'undone'/'unjournalable' are never targets)
+  local target="" i
+  i=$((jn - 1))
+  while [ "$i" -ge 0 ]; do
+    case "${j_verb[i]}" in
+      moved|relocated)
+        if ! move_was_undone "$i"; then target="${j_rid[i]}"; break; fi ;;
+    esac
+    i=$((i - 1))
+  done
+  if [ -z "$target" ]; then
+    echo "Nothing to undo — every journaled move has already been restored."
+    exit 0
+  fi
+
+  # collect that run's still-standing moves, in journal (= move) order
+  sel=()
+  local sn=0
+  i=0
+  while [ "$i" -lt "$jn" ]; do
+    if [ "${j_rid[i]}" = "$target" ]; then
+      case "${j_verb[i]}" in
+        moved|relocated)
+          if ! move_was_undone "$i"; then sel[sn]="$i"; sn=$((sn + 1)); fi ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+
+  local when run_ep undo_run=""
+  run_ep="${target%%.*}"
+  when="$(date -r "$run_ep" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "?")"
+  if [ "$apply" -eq 1 ]; then
+    undo_run="$(date +%s).$$"
+    echo "Restoring the run from $when ($sn move(s), newest first):"
+  else
+    echo "${D}Undo plan for the run from $when ($sn move(s), newest first — DRY RUN):${N}"
+  fi
+
+  # walk newest-first, classify, and (only with --apply) restore
+  local restorable=0 occupied=0 gone=0 restored=0 failed=0 k from to
+  k=$((sn - 1))
+  while [ "$k" -ge 0 ]; do
+    i="${sel[k]}"
+    src="${j_src[i]}"; dst="${j_dst[i]}"
+    from="${dst#"$WATCH_DIR"/}"; to="${src#"$WATCH_DIR"/}"
+    if [ ! -f "$dst" ]; then
+      gone=$((gone + 1))
+      echo "  skip     $from  ->  $to  ${D}(file moved since)${N}"
+    elif [ -e "$src" ]; then
+      occupied=$((occupied + 1))
+      echo "  skip     $from  ->  $to  ${D}(original slot occupied)${N}"
+    elif [ "$apply" -eq 1 ]; then
+      mkdir -p "${src%/*}" 2>/dev/null
+      if mv -n "$dst" "$src" 2>/dev/null; then
+        restored=$((restored + 1))
+        printf '%s\t%s\tundone\t%s\t%s\n' "$(date +%s)" "$undo_run" "$dst" "$src" >> "$JOURNAL"
+        echo "$(date '+%F %T')  undone  ${dst##*/}  ->  $to" >> "$LOG" 2>/dev/null
+        echo "  ${G}restored${N} $from  ->  $to"
+      else
+        failed=$((failed + 1))
+        echo "  ${Y}FAILED${N}   $from  ->  $to"
+      fi
+    else
+      restorable=$((restorable + 1))
+      echo "  restore  $from  ->  $to"
+    fi
+    k=$((k - 1))
+  done
+
+  echo
+  if [ "$apply" -eq 1 ]; then
+    echo "Restored $restored of $sn; $occupied skipped (slot occupied), $gone skipped (moved since)."
+    if [ "$failed" -gt 0 ]; then
+      echo "$PROG: $failed restore(s) failed — see above." >&2
+      exit 1
+    fi
+  else
+    echo "$restorable restorable; $occupied would skip (slot occupied), $gone would skip (moved since)."
+    if [ "$restorable" -gt 0 ]; then
+      echo "Nothing was moved. Run '$PROG undo --apply' to restore."
+    else
+      echo "Nothing is restorable from this run — there is nothing to apply."
+    fi
+  fi
+}
+
+cmd_pause() {
+  need_macos
+  if [ "$#" -gt 1 ]; then
+    echo "$PROG: usage: $PROG pause [DURATION]   (e.g. '$PROG pause 2h')" >&2
+    exit 1
+  fi
+  local dur="${1:-}" secs until_ep
+  mkdir -p "$STATE_DIR"
+  if [ -z "$dur" ]; then
+    printf '0\n' > "$PAUSE"
+    echo "Sorting paused until resumed. Re-enable with '$PROG resume'."
+    return 0
+  fi
+  if ! secs="$(parse_duration "$dur")"; then
+    echo "$PROG: can't parse duration '$dur' — use bare seconds or <n>s/m/h/d (e.g. 30m, 2h, 1d)." >&2
+    exit 1
+  fi
+  until_ep=$(( $(date +%s) + secs ))
+  printf '%s\n' "$until_ep" > "$PAUSE"
+  echo "Sorting paused until $(date -r "$until_ep" '+%Y-%m-%d %H:%M')."
+}
+
+cmd_resume() {
+  if [ -f "$PAUSE" ]; then
+    rm -f "$PAUSE"
+    echo "Resumed — sorting is active again."
+  else
+    echo "Not paused — nothing to do."
+  fi
+}
+
+cmd_config() {
+  read_config
+  local key="${1:-}" val="${2:-}" v tmp
+  if [ "$#" -gt 2 ]; then
+    echo "$PROG: usage: $PROG config [KEY [VALUE]]" >&2
+    exit 1
+  fi
+
+  # no arguments: print every effective setting with its provenance
+  if [ "$#" -eq 0 ]; then
+    v="$(setting_of min_age)";      echo "min_age = ${v% *}  (${v#* })"
+    v="$(setting_of on_duplicate)"; echo "on_duplicate = ${v% *}  (${v#* })"
+    echo
+    echo "${D}Config file: $CONFIG   ('$PROG config KEY VALUE' to change)${N}"
+    return 0
+  fi
+
+  case "$key" in
+    min_age|on_duplicate) ;;
+    *) echo "$PROG: unknown config key: $key (known keys: min_age, on_duplicate)" >&2; exit 1 ;;
+  esac
+
+  # one argument: print that key's effective value
+  if [ "$#" -eq 1 ]; then
+    v="$(setting_of "$key")"
+    echo "${v% *}"
+    return 0
+  fi
+
+  # two arguments: validate, then rewrite the file keeping the other key
+  case "$key" in
+    min_age)
+      if ! parse_duration "$val" >/dev/null; then
+        echo "$PROG: invalid min_age '$val' — use bare seconds or <n>s/m/h/d (e.g. 90, 45m, 1h, 7d)." >&2
+        exit 1
+      fi ;;
+    on_duplicate)
+      case "$val" in
+        rename|skip|trash) ;;
+        *) echo "$PROG: invalid on_duplicate '$val' — use rename, skip, or trash." >&2; exit 1 ;;
+      esac ;;
+  esac
+  mkdir -p "$STATE_DIR"
+  # temp file next to the config so the final mv is an atomic rename
+  tmp="$(mktemp "$CONFIG.XXXXXX")" || { echo "$PROG: mktemp failed." >&2; exit 1; }
+  {
+    if [ "$key" = "min_age" ]; then printf 'min_age=%s\n' "$val"
+    elif [ -n "$CFG_MIN_AGE" ]; then printf 'min_age=%s\n' "$CFG_MIN_AGE"; fi
+    if [ "$key" = "on_duplicate" ]; then printf 'on_duplicate=%s\n' "$val"
+    elif [ -n "$CFG_ON_DUPLICATE" ]; then printf 'on_duplicate=%s\n' "$CFG_ON_DUPLICATE"; fi
+  } > "$tmp"
+  mv "$tmp" "$CONFIG"
+  echo "$key = $val  (saved to $CONFIG)"
 }
 
 cmd_update() {
@@ -247,6 +551,11 @@ cmd_doctor() {
   echo "Diagnostics:"
   ok()   { printf '  %s[ok]%s  %s\n' "$G" "$N" "$1"; }
   warn() { printf '  %s[!!]%s  %s\n' "$Y" "$N" "$1"; }
+  if pstate="$(pause_state)"; then
+    warn "$pstate — '$PROG resume' to re-enable sorting"
+  else
+    ok "not paused"
+  fi
   if [ -n "$ENGINE" ]; then ok "engine: $ENGINE"; else warn "engine script not found"; fi
   if [ -d "$APP" ]; then ok "app wrapper present"; else warn "app wrapper missing ($APP)"; fi
   if [ -f "$PLIST" ]; then ok "LaunchAgent plist present"; else warn "plist missing ($PLIST)"; fi
@@ -286,6 +595,10 @@ case "$cmd" in
   preview|dry-run)        cmd_preview ;;
   sweep)                  cmd_sweep "$@" ;;
   run)                    cmd_run ;;
+  undo)                   cmd_undo "$@" ;;
+  pause)                  cmd_pause "$@" ;;
+  resume)                 cmd_resume ;;
+  config)                 cmd_config "$@" ;;
   logs)                   cmd_logs "$@" ;;
   update)                 cmd_update ;;
   doctor)                 cmd_doctor ;;

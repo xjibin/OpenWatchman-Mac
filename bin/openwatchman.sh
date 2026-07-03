@@ -35,8 +35,16 @@
 #   * Skips dotfiles and in-progress downloads
 #     (.crdownload / .download / .part / .partial / .tmp).
 #   * Waits for a file's size to hold steady before moving it.
-#   * Never overwrites. A name collision gets a timestamp suffix.
-#   * Every move is appended to ~/Library/Logs/openwatchman.log.
+#   * Optional settle delay: with min_age set, a file moves only once its
+#     date-added — the same clock that picks the month — is at least that old.
+#   * Never overwrites. A name collision gets a timestamp suffix — unless
+#     on_duplicate is `skip` or `trash` AND the two files are byte-identical
+#     (same size and same SHA-256): then the newcomer is left in place or
+#     moved to the Trash. Different content always falls back to the rename.
+#   * Every move is appended to ~/Library/Logs/openwatchman.log, and to a
+#     tab-separated journal in the state folder that powers 'openwatch undo'.
+#   * A pause flag file ('openwatch pause' / 'openwatch resume') suspends
+#     sorting: the engine exits at once until the pause expires.
 #   * Zero network access. Nothing leaves this Mac.
 #
 # Usage:
@@ -51,14 +59,33 @@
 #                           testing and one-time sweeps. Example — preview
 #                           sorting/relocating EVERY eligible file:
 #                             OPENWATCHMAN_BASELINE=1 openwatchman.sh --dry-run
+#   OPENWATCHMAN_MIN_AGE    settle delay — bare seconds or <n>s/m/h/d
+#                           (beats the config file; default 0)
+#   OPENWATCHMAN_ON_DUPLICATE
+#                           rename | skip | trash for identical-content name
+#                           collisions (beats the config file; default rename)
+#
+# Optional config file (plain key=value lines, whitelisted keys only, NEVER
+# sourced):  ${XDG_DATA_HOME:-~/.local/share}/openwatchman/config
+#   recognized keys:  min_age=<n[s|m|h|d]>   on_duplicate=<rename|skip|trash>
 
 set -u
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 
 WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
 MARKER="$WATCH_DIR/.openwatchman-baseline"
 LOG="$HOME/Library/Logs/openwatchman.log"
+
+STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman"
+JOURNAL="$STATE_DIR/journal.tsv"   # TSV move journal behind 'openwatch undo'
+CONFIG="$STATE_DIR/config"         # optional key=value settings (never sourced)
+PAUSE="$STATE_DIR/paused"          # expiry epoch; 0 = paused until resumed
+
+NOW="$(date +%s)"                  # one clock per run: run id + settle delay
+RUN_ID="$NOW.$$"
+TAB=$'\t'
+NL=$'\n'
 
 usage() {
   cat <<'EOF'
@@ -73,6 +100,11 @@ Environment:
   OPENWATCHMAN_DIR        folder to watch (default: ~/Downloads)
   OPENWATCHMAN_BASELINE   epoch seconds; only files added after this moment
                           are eligible (overrides the marker file)
+  OPENWATCHMAN_MIN_AGE    settle delay before a file may move — bare seconds
+                          or <n>s/m/h/d, e.g. 45m (default: 0, move at once)
+  OPENWATCHMAN_ON_DUPLICATE
+                          rename (default) | skip | trash — what to do when
+                          an identical file already sits at the destination
 EOF
 }
 
@@ -106,6 +138,39 @@ say() {
 if [ "$(uname -s)" != "Darwin" ]; then
   echo "openwatchman: macOS only (uses BSD date/stat and Spotlight's mdls)" >&2
   exit 1
+fi
+
+# --- pause flag: suspend everything before any baseline/marker logic ---------
+# The file holds one expiry epoch (0 = paused until 'openwatch resume').
+# Headless runs exit silently — the agent fires every 5 minutes and must not
+# spam the log. An expired pause is cleared and the run continues normally.
+if [ -f "$PAUSE" ]; then
+  pause_until="$(cat "$PAUSE" 2>/dev/null)"
+  case "$pause_until" in ''|*[!0-9]*) pause_until=0 ;; esac   # unreadable = stay paused
+  if [ "$pause_until" -eq 0 ] || [ "$pause_until" -gt "$NOW" ]; then
+    say "DRY RUN: paused ($PAUSE) — nothing to do."
+    exit 0
+  fi
+  if [ "$DRYRUN" != "1" ]; then
+    rm -f "$PAUSE"                   # pause expired — clear it and carry on
+  fi
+fi
+
+# --- journal housekeeping: keep the undo journal from growing unbounded ------
+if [ "$DRYRUN" != "1" ] && [ -f "$JOURNAL" ]; then
+  jl="$(wc -l < "$JOURNAL" 2>/dev/null)" || jl=0
+  case "$jl" in *[0-9]*) ;; *) jl=0 ;; esac
+  if [ "$jl" -gt 2000 ]; then
+    # temp file next to the journal so the final mv is an atomic rename
+    jt="$(mktemp "$JOURNAL.XXXXXX" 2>/dev/null)" || jt=""
+    if [ -n "$jt" ]; then
+      if tail -n 1000 "$JOURNAL" > "$jt" 2>/dev/null; then
+        mv "$jt" "$JOURNAL"
+      else
+        rm -f "$jt"
+      fi
+    fi
+  fi
 fi
 
 # --- baseline: only files added strictly after this epoch are eligible ------
@@ -159,13 +224,83 @@ added_epoch_of() {
   echo "$ep"
 }
 
-# move $1 into directory $2 without ever clobbering; log the action verb $3
+# parse a duration — bare seconds or <n>s/m/h/d — into seconds on stdout.
+# Fails on anything else. (Kept byte-identical with the copy in bin/owm —
+# update both together.)
+parse_duration() {
+  local v="$1" n mult
+  case "$v" in ''|*[!0-9smhd]*) return 1 ;; esac
+  case "$v" in
+    *s) n="${v%s}"; mult=1 ;;
+    *m) n="${v%m}"; mult=60 ;;
+    *h) n="${v%h}"; mult=3600 ;;
+    *d) n="${v%d}"; mult=86400 ;;
+    *)  n="$v";     mult=1 ;;
+  esac
+  case "$n" in ''|*[!0-9]*) return 1 ;; esac
+  echo $(( 10#$n * mult ))
+}
+
+# are $1 and $2 byte-identical? Sizes first; hash ONLY when sizes match.
+same_content() {
+  local a="$1" b="$2" sa sb ha hb
+  sa="$(stat -f %z "$a" 2>/dev/null)"
+  sb="$(stat -f %z "$b" 2>/dev/null)"
+  if [ -z "$sa" ] || [ "$sa" != "$sb" ]; then return 1; fi
+  ha="$(shasum -a 256 "$a" 2>/dev/null | cut -d' ' -f1)"
+  hb="$(shasum -a 256 "$b" 2>/dev/null | cut -d' ' -f1)"
+  if [ -z "$ha" ] || [ "$ha" != "$hb" ]; then return 1; fi
+  return 0
+}
+
+# append one TSV line to the journal that powers 'openwatch undo'.
+# Best-effort: a move is never rolled back because journaling failed.
+# A path containing a tab or newline cannot live in a TSV line — such a move
+# is recorded as 'unjournalable' (epoch + run id only) and undo skips it.
+journal_line() {
+  local verb="$1" src="$2" dst="$3"
+  mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+  case "$src$dst" in
+    *"$TAB"*|*"$NL"*)
+      printf '%s\t%s\tunjournalable\t\t\n' "$(date +%s)" "$RUN_ID" >> "$JOURNAL" 2>/dev/null ;;
+    *)
+      printf '%s\t%s\t%s\t%s\t%s\n' "$(date +%s)" "$RUN_ID" "$verb" "$src" "$dst" >> "$JOURNAL" 2>/dev/null ;;
+  esac
+  return 0
+}
+
+# move $1 into directory $2 without ever clobbering; log the action verb $3.
+# On a name collision, on_duplicate=skip/trash handles a byte-identical twin
+# (leave in place / move to Trash); anything else gets the timestamp rename.
 safe_move() {
-  local src="$1" destdir="$2" verb="$3" b t stamp
+  local src="$1" destdir="$2" verb="$3" b t stamp rel
   b="${src##*/}"
+  rel="${destdir#"$WATCH_DIR"/}"
   mkdir -p "$destdir"
   t="$destdir/$b"
   if [ -e "$t" ]; then
+    if [ "$ON_DUPLICATE" != "rename" ] && same_content "$src" "$t"; then
+      if [ "$ON_DUPLICATE" = "skip" ]; then
+        echo "$(date '+%F %T')  duplicate  $b  (identical in $rel/, left in place)" >> "$LOG" 2>/dev/null
+        return 0
+      fi
+      # trash: same no-clobber rename rule inside the Trash
+      t="$HOME/.Trash/$b"
+      if [ -e "$t" ]; then
+        stamp="$(date +%s)-$$"
+        if [ "$b" = "${b##*.}" ]; then
+          t="$HOME/.Trash/${b}-$stamp"
+        else
+          t="$HOME/.Trash/${b%.*}-$stamp.${b##*.}"
+        fi
+      fi
+      if mv -n "$src" "$t"; then
+        echo "$(date '+%F %T')  duplicate  $b  (identical in $rel/, moved to Trash)" >> "$LOG" 2>/dev/null
+        journal_line "moved" "$src" "$t"
+        return 0
+      fi
+      return 1
+    fi
     stamp="$(date +%s)-$$"
     if [ "$b" = "${b##*.}" ]; then
       t="$destdir/${b}-$stamp"
@@ -174,7 +309,8 @@ safe_move() {
     fi
   fi
   if mv -n "$src" "$t"; then
-    echo "$(date '+%F %T')  $verb  $b  ->  ${destdir#"$WATCH_DIR"/}/" >> "$LOG" 2>/dev/null
+    echo "$(date '+%F %T')  $verb  $b  ->  $rel/" >> "$LOG" 2>/dev/null
+    journal_line "$verb" "$src" "$t"
     return 0
   fi
   return 1
@@ -188,6 +324,33 @@ size_is_stable() {
   s2="$(stat -f %z "$1" 2>/dev/null)"
   [ "$s1" = "$s2" ]
 }
+
+# --- optional settings: config file (whitelist, never sourced) + environment -
+CFG_MIN_AGE=""
+CFG_ON_DUPLICATE=""
+if [ -f "$CONFIG" ]; then
+  while IFS= read -r cfg_line || [ -n "$cfg_line" ]; do
+    case "$cfg_line" in
+      min_age=*)      CFG_MIN_AGE="${cfg_line#min_age=}" ;;
+      on_duplicate=*) CFG_ON_DUPLICATE="${cfg_line#on_duplicate=}" ;;
+    esac
+  done < "$CONFIG"
+fi
+
+# settle delay in seconds; an unparseable value falls back to 0 (off)
+MIN_AGE=0
+if [ -n "${OPENWATCHMAN_MIN_AGE:-}" ]; then
+  if min_age_v="$(parse_duration "$OPENWATCHMAN_MIN_AGE")"; then MIN_AGE="$min_age_v"; fi
+elif [ -n "$CFG_MIN_AGE" ]; then
+  if min_age_v="$(parse_duration "$CFG_MIN_AGE")"; then MIN_AGE="$min_age_v"; fi
+fi
+
+# collision policy; anything but skip/trash means today's rename behavior
+ON_DUPLICATE="rename"
+case "${OPENWATCHMAN_ON_DUPLICATE:-$CFG_ON_DUPLICATE}" in
+  skip)  ON_DUPLICATE="skip" ;;
+  trash) ON_DUPLICATE="trash" ;;
+esac
 
 # ============================================================================
 # Phase 1 — sort files that land at the TOP LEVEL of the watched folder
@@ -205,6 +368,9 @@ for f in "$WATCH_DIR"/*; do
 
   added_epoch="$(added_epoch_of "$f")" || continue
   [ "$added_epoch" -gt "$BASELINE" ] || continue    # only files added after install
+  if [ "$MIN_AGE" -gt 0 ] && [ "$added_epoch" -gt "$((NOW - MIN_AGE))" ]; then
+    continue                          # settle delay: too fresh — a later run gets it
+  fi
 
   year="$(date -r "$added_epoch" +%Y)"
   month="$(( 10#$(date -r "$added_epoch" +%m) ))"   # no leading zero: 6, not 06
@@ -250,6 +416,9 @@ if [ -n "$_ref" ] && touch -t "$(date -r "$BASELINE" +%Y%m%d%H%M.%S)" "$_ref" 2>
     # signal 1: date added (mtime fallback) — also the eligibility gate
     added_epoch="$(added_epoch_of "$f")" || continue
     [ "$added_epoch" -gt "$BASELINE" ] || continue
+    if [ "$MIN_AGE" -gt 0 ] && [ "$added_epoch" -gt "$((NOW - MIN_AGE))" ]; then
+      continue                        # settle delay: too fresh — a later run gets it
+    fi
 
     # signal 2: on-disk birth time (survives moves). No birth time -> skip.
     birth_epoch="$(stat -f %B "$f" 2>/dev/null)"

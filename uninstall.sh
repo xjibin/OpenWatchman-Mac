@@ -2,7 +2,8 @@
 #
 # OpenWatchman uninstaller.
 #
-# Removes the agent, the app wrapper, and the sorter script.
+# Removes the agent, the app wrapper, the sorter script, and the saved state
+# (move journal, config, pause flag, repo record).
 # Your sorted Year/Month folders and every file in them are NOT touched.
 
 set -euo pipefail
@@ -11,6 +12,7 @@ LABEL="com.openwatchman.agent"
 WATCH_DIR="${OPENWATCHMAN_DIR:-$HOME/Downloads}"
 
 SCRIPT_DEST="$HOME/.local/bin/openwatchman.sh"
+STATE_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openwatchman"
 APP="$HOME/Applications/OpenWatchman.app"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 MARKER="$WATCH_DIR/.openwatchman-baseline"
@@ -52,7 +54,8 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-echo "This removes the OpenWatchman agent, app wrapper, and script."
+echo "This removes the OpenWatchman agent, app wrapper, script, and saved state"
+echo "(move journal, config, pause flag, repo record)."
 echo "Sorted Year/Month folders and the files inside them are not touched."
 if [ "$ASSUME_YES" -ne 1 ]; then
   read -r -p "Proceed? [y/N] " answer
@@ -69,6 +72,8 @@ launchctl bootout "gui/$UID_NUM/$LABEL" 2>/dev/null || true
 echo "[2/4] Removing installed files"
 rm -f "$PLIST" "$SCRIPT_DEST"
 rm -rf "$APP"
+rm -rf "$STATE_DIR"
+echo "      removed saved state (journal, config, pause flag, repo record): $STATE_DIR"
 
 echo "[3/4] Marker and logs"
 if [ "$PURGE" -eq 1 ]; then
