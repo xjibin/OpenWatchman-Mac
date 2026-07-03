@@ -4,6 +4,23 @@ All notable changes to this project are documented here. Format loosely
 follows [Keep a Changelog](https://keepachangelog.com/); this project uses
 simple `MAJOR.MINOR.PATCH` tags.
 
+## [1.6.1] — 2026-07-03
+
+### Fixed
+- `OPENWATCHMAN_DIR` no longer passes through the watch-list colon splitter.
+  It is defined as exactly one directory, and colons are legal in macOS
+  pathnames — a path containing one would have silently become two bogus
+  watch folders.
+- Stale Phase 2 reference files (stranded in the state dir by a crashed or
+  killed pass) are now cleaned up at the start of every real run. Dry runs
+  and paused runs remain completely side-effect-free.
+
+### Changed
+- The engine refuses to watch the filesystem root or `$HOME` itself even if
+  a hand-edited config lists them (one `refused unsafe watch folder` log
+  line per pass; the entry is skipped, the rest of the list still runs).
+  The CLI setter already rejected both; this closes the hand-edit path.
+
 ## [1.6.0] — 2026-07-03
 
 ### Added
@@ -34,6 +51,11 @@ simple `MAJOR.MINOR.PATCH` tags.
 - **Dataless-file guard.** Files whose BSD flags include `SF_DATALESS`
   (iCloud placeholders) are skipped silently, so a move can never force a
   download.
+
+### Changed
+- Phase 2 now recognizes managed year folders only when the name is
+  exactly four digits (e.g. `2026`); previously any all-numeric folder
+  name qualified. Folders you name yourself are unaffected either way.
 
 ### Notes
 - **Defaults preserve existing behavior.** With nothing configured — no

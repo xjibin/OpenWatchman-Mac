@@ -90,7 +90,7 @@
 
 set -u
 
-VERSION="1.6.0"
+VERSION="1.6.1"
 
 LOG="$HOME/Library/Logs/openwatchman.log"
 
@@ -177,6 +177,14 @@ if [ -f "$PAUSE" ]; then
   if [ "$DRYRUN" != "1" ]; then
     rm -f "$PAUSE"                   # pause expired — clear it and carry on
   fi
+fi
+
+# --- stale Phase 2 reference files: a crashed past run may have stranded some
+# in the state dir (only the happy path removes its own). Real runs only —
+# dry runs stay side-effect-free, and this sits after the pause gate so a
+# paused run touches nothing at all.
+if [ "$DRYRUN" != "1" ] && [ -n "$STATE_DIR" ]; then
+  rm -f "$STATE_DIR"/phase2ref.* 2>/dev/null
 fi
 
 # --- journal housekeeping: keep the undo journal from growing unbounded ------
@@ -438,23 +446,48 @@ esac
 # missing baseline applies ONLY to config-listed folders, so an unconfigured
 # upgrade behaves exactly as before.
 WATCH_SOURCE="default"
-watch_list="$HOME/Downloads"
-if [ -n "${OPENWATCHMAN_DIR:-}" ]; then
-  watch_list="$OPENWATCHMAN_DIR"
-  WATCH_SOURCE="env"
-elif [ -n "$CFG_WATCH" ]; then
-  watch_list="$CFG_WATCH"
-  WATCH_SOURCE="config"
-fi
 WATCH_COUNT=0
-watch_rest="$watch_list"
-while [ -n "$watch_rest" ]; do
-  watch_entry="${watch_rest%%:*}"
-  if [ "$watch_rest" = "$watch_entry" ]; then watch_rest=""; else watch_rest="${watch_rest#*:}"; fi
-  [ -n "$watch_entry" ] || continue
+
+# accept one resolved watch folder — from ANY source, including a hand-edited
+# config file — refusing the two entries that must never be watched: the
+# filesystem root and $HOME itself. A single trailing slash is normalized off.
+add_watch_dir() {
+  local entry="$1"
+  if [ "$entry" != "/" ]; then
+    entry="${entry%/}"
+  fi
+  if [ "$entry" = "/" ] || [ "$entry" = "${HOME%/}" ] || [ -z "$entry" ]; then
+    if [ "$DRYRUN" = "1" ]; then
+      say "DRY RUN: refused unsafe watch folder $1 — skipped."
+    else
+      echo "$(date '+%F %T')  refused unsafe watch folder $1" >> "$LOG" 2>/dev/null
+    fi
+    return 0
+  fi
   WATCH_COUNT=$((WATCH_COUNT + 1))
-  WATCH_DIRS[WATCH_COUNT]="$watch_entry"
-done
+  WATCH_DIRS[WATCH_COUNT]="$entry"
+  return 0
+}
+
+if [ -n "${OPENWATCHMAN_DIR:-}" ]; then
+  # the env override is EXACTLY ONE directory — it never passes through the
+  # colon splitter (colons are legal in macOS pathnames)
+  WATCH_SOURCE="env"
+  add_watch_dir "$OPENWATCHMAN_DIR"
+else
+  watch_list="$HOME/Downloads"
+  if [ -n "$CFG_WATCH" ]; then
+    watch_list="$CFG_WATCH"
+    WATCH_SOURCE="config"
+  fi
+  watch_rest="$watch_list"
+  while [ -n "$watch_rest" ]; do
+    watch_entry="${watch_rest%%:*}"
+    if [ "$watch_rest" = "$watch_entry" ]; then watch_rest=""; else watch_rest="${watch_rest#*:}"; fi
+    [ -n "$watch_entry" ] || continue
+    add_watch_dir "$watch_entry"
+  done
+fi
 if [ "$WATCH_COUNT" -eq 0 ]; then
   say "DRY RUN: no watch folders configured. Nothing to do."
   exit 0
